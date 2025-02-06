@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Slot Machine Game</title>
+  <style>
+    /* Basic styling for the game */
+    html, body {
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background-color: #f0f0f0;
+      padding-top: 70px; /* keep space for the fixed money header */
+    }
+    h1 {
+      margin-top: 20px;
+    }
+
+    /* Fixed bar at the top for money display */
+    #moneyContainer {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      background: #ffffffcc; /* Slightly transparent white background */
+      z-index: 999;
+      text-align: center;
+      padding: 10px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    #moneyContainer span {
+      font-size: 1.5em; 
+      font-weight: bold;
+      color: #333;
+    }
+
+    .machine {
+      background-color: #fff;
+      border: 2px solid #333;
+      padding: 20px;
+      margin: 20px auto;
+      width: 320px;
+      box-shadow: 2px 2px 8px rgba(0,0,0,0.2);
+      border-radius: 8px;
+      /* Default CSS variables for flash: color, duration, scale, iteration */
+      --flash-color: #fff;
+      --flash-duration: 0.5s;
+      --flash-scale: 1;
+      --flash-count: 1;
+      position: relative;
+    }
+    .machine h3 {
+      margin: 0 0 10px 0;
+    }
+    .resultDisplay {
+      font-size: 1.2em;
+      margin-bottom: 15px;
+      min-height: 1.6em;
+    }
+    .cooldownBar {
+      width: 100%;
+      height: 20px;
+      background-color: #ccc;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 15px;
+    }
+    .cooldownFill {
+      height: 100%;
+      width: 100%;
+      background-color: #76c7c0;
+      transition: width 0.1s linear;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 1em;
+      margin: 5px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .spinButton {
+      background-color: #28a745;
+      color: #fff;
+    }
+    #spinAllButton {
+      background-color: #17a2b8;
+      color: #fff;
+    }
+    #resetButton {
+      background-color: #dc3545;
+      color: #fff;
+    }
+
+    @keyframes flashAnimation {
+      0%, 100% {
+        background-color: #fff;
+        transform: scale(1);
+      }
+      20%, 60% {
+        background-color: var(--flash-color);
+        transform: scale(var(--flash-scale));
+      }
+      40%, 80% {
+        background-color: #fff;
+        transform: scale(1);
+      }
+    }
+    .flash {
+      animation-name: flashAnimation;
+      animation-duration: var(--flash-duration, 0.5s);
+      animation-timing-function: ease-in-out;
+      animation-iteration-count: var(--flash-count, 1);
+    }
+
+    .machineStats {
+      margin-top: 10px;
+      text-align: left;
+      font-size: 0.9em;
+      background: #fafafa;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+    }
+    .machineStats ul {
+      list-style-type: none;
+      margin: 0;
+      padding: 0;
+    }
+    .machineStats li {
+      margin: 2px 0;
+    }
+
+    /* Initially hide the container for selecting a slot type to spin all */
+    #spinTypeContainer {
+      display: none;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <!-- NOTE: We are automatically starting with a .01 slot machine 
+       and $20, so the user can afford to spin or buy more. -->
+
+  <!-- Fixed money display container -->
+  <div id="moneyContainer">
+    <span>Money: $<span id="moneyDisplay">20.00</span></span>
+  </div>
+
+  <h1>Slot Machine Game (Up to $10,000 per spin!)</h1>
+
+  <!-- Container for all "Buy" buttons -->
+  <div id="buyButtonsContainer"></div>
+
+  <!-- Dropdown container: hidden until more than one distinct type exists -->
+  <div id="spinTypeContainer">
+    <label for="spinTypeSelect"><strong>Select Slot Type:</strong></label>
+    <select id="spinTypeSelect"></select>
+    
+    <!-- Spin All button appears only when more than one machine exists -->
+    <button id="spinAllButton" style="display:none;">Spin All Machines of Selected Type</button>
+  </div>
+
+  <br>
+  <button id="resetButton">Reset Game</button>
+  
+  <!-- Container where each machine’s UI is added -->
+  <div id="machinesContainer"></div>
+  
+  <script>
+    /*******************************************************
+     * 1) PLAYER STATE
+     ******************************************************/
+    let playerMoney = 1.00;  // Enough to buy + spin right away
+    let machines = []; // all machines
+
+    // Maintain a set of unique spinCosts for the dropdown
+    let spinCostOptions = new Set();
+
+    function updateMoneyDisplay() {
+      document.getElementById("moneyDisplay").innerText = playerMoney.toFixed(2);
+    }
+    updateMoneyDisplay();
+
+    /*******************************************************
+     * 2) TIER DEFINITIONS
+     ******************************************************/
+    const SLOT_TIERS = [
+      // spinCost,   buyCost,   payoutScale,   autoSpinCost
+      { spinCost: 0.01,   buyCost: 2,      payoutScale: 1,      autoSpinCost: 4 },
+      { spinCost: 0.05,   buyCost: 20,     payoutScale: 5,      autoSpinCost: 8 },
+      { spinCost: 0.25,   buyCost: 100,    payoutScale: 25,     autoSpinCost: 16 },
+      { spinCost: 1.00,   buyCost: 500,    payoutScale: 100,    autoSpinCost: 32 },
+      { spinCost: 5.00,   buyCost: 2500,   payoutScale: 500,    autoSpinCost: 64 },
+      { spinCost: 25.00,  buyCost: 12500,  payoutScale: 2500,   autoSpinCost: 128 },
+      { spinCost: 125.00, buyCost: 62500,  payoutScale: 12500,  autoSpinCost: 256 },
+      { spinCost: 625.00, buyCost: 312500, payoutScale: 62500,  autoSpinCost: 512 },
+      { spinCost: 3125.00,buyCost: 1562500,payoutScale: 312500, autoSpinCost: 1024 },
+      { spinCost: 10000.00,buyCost: 5000000, payoutScale: 1000000, autoSpinCost: 2048 }
+    ];
+
+    // We track the "next buy cost" for each tier (doubling each time).
+    let currentBuyCosts = SLOT_TIERS.map(t => t.buyCost);
+
+    // We want to START the game with a .01 slot => that means tier 0 is "purchased"
+    // and we should reveal tier 1 next.
+    let highestUnlockedTier = 1; 
+
+    // base payout structure for 0.01
+    const basePayoutStructure01 = [
+      { probability: 0.1,   payout: 0.01, tier: 1 },
+      { probability: 0.1,   payout: 0.02, tier: 2 },
+      { probability: 0.075, payout: 0.03, tier: 3 },
+      { probability: 0.05,  payout: 0.10, tier: 4 },
+      { probability: 0.01,  payout: 0.50, tier: 5 },
+      { probability: 0.005, payout: 1.00, tier: 6 }
+    ];
+
+    function scalePayoutStructure(factor) {
+      return basePayoutStructure01.map(o => ({
+        probability: o.probability,
+        payout: o.payout * factor,
+        tier: o.tier
+      }));
+    }
+
+    /*******************************************************
+     * 3) ANIMATIONS
+     ******************************************************/
+    const animationsByTier = {
+      1: { flashColor: 'rgba(0, 255, 0, 0.2)', flashScale: 1.02, flashDuration: '0.4s', flashCount: 1 },
+      2: { flashColor: 'rgba(0, 255, 0, 0.35)', flashScale: 1.03, flashDuration: '0.5s', flashCount: 1 },
+      3: { flashColor: 'rgba(0, 255, 0, 0.5)', flashScale: 1.05, flashDuration: '0.6s', flashCount: 1 },
+      4: { flashColor: 'rgba(173, 255, 47, 0.7)', flashScale: 1.10, flashDuration: '0.8s', flashCount: 2 },
+      5: { flashColor: 'rgba(255, 255, 0, 0.8)', flashScale: 1.15, flashDuration: '1.0s', flashCount: 2 },
+      6: { flashColor: 'rgba(255, 165, 0, 0.9)', flashScale: 1.20, flashDuration: '1.2s', flashCount: 3 },
+      7: { flashColor: 'rgba(255, 0, 0, 1)',     flashScale: 1.25, flashDuration: '1.5s', flashCount: 4 },
+      0: { flashColor: '#fff', flashScale: 1, flashDuration: '0.5s', flashCount: 1 }
+    };
+    function flashMachine(machine, tier) {
+      const now = Date.now();
+      if (now < machine.animationEndTime) {
+        if (tier <= machine.currentAnimationTier) {
+          return;
+        }
+      }
+      const anim = animationsByTier[tier] || animationsByTier[0];
+      machine.currentAnimationTier = tier;
+      let durationSeconds = parseFloat(anim.flashDuration) * anim.flashCount;
+      machine.animationEndTime = now + (durationSeconds * 1000);
+
+      let container = machine.ui.container;
+      container.style.setProperty('--flash-color', anim.flashColor);
+      container.style.setProperty('--flash-scale', anim.flashScale);
+      container.style.setProperty('--flash-duration', anim.flashDuration);
+      container.style.setProperty('--flash-count', anim.flashCount);
+
+      container.classList.add('flash');
+      setTimeout(() => {
+        if (machine.currentAnimationTier === tier && Date.now() >= machine.animationEndTime) {
+          container.classList.remove('flash');
+          machine.currentAnimationTier = 0;
+        }
+      }, durationSeconds * 1000);
+    }
+
+    /*******************************************************
+     * 4) SLOT MACHINE CLASS
+     ******************************************************/
+    class SlotMachine {
+      constructor(spinCost, payoutScale, autoSpinCost) {
+        this.spinCost = spinCost;
+        this.payoutScale = payoutScale;
+        this.autoSpinCost = autoSpinCost;
+        this.payoutStructure = scalePayoutStructure(payoutScale);
+
+        this.machineName = `$${spinCost.toFixed(2)} Slot`;
+        this.cooldownTime = 1500;
+        this.currentAnimationTier = 0;
+        this.animationEndTime = 0;
+        this.inCooldown = false;
+        this.cooldownStart = 0;
+
+        // Scale all upgrade costs based on spin cost
+        const scaleFactor = spinCost / 0.01;
+        this.cooldownUpgradeCost = 0.50 * scaleFactor;
+        this.evUpgradeCost       = 1.00  * scaleFactor;
+        this.highestPayoutCost   = 3.00  * scaleFactor;
+        this.nextHighestPayout   = 2.00  * payoutScale; 
+
+        this.cooldownUpgradesPurchased       = 0;
+        this.evUpgradesPurchased             = 0;
+        this.highestPayoutUpgradesPurchased  = 0;
+
+        // Auto-spin
+        this.autoSpinEnabled = false;
+        this.ui = {};
+      }
+      canSpin() {
+        return !this.inCooldown;
+      }
+      startCooldown() {
+        this.inCooldown = true;
+        this.cooldownStart = Date.now();
+        updateMachineCooldown(this);
+        setTimeout(() => {
+          this.inCooldown = false;
+          if (this.ui.cooldownFill) {
+            this.ui.cooldownFill.style.width = "100%";
+          }
+        }, this.cooldownTime);
+      }
+      spinOutcome() {
+        let rand = Math.random();
+        let cumulativeProbability = 0;
+        for (let outcome of this.payoutStructure) {
+          cumulativeProbability += outcome.probability;
+          if (rand < cumulativeProbability) {
+            return { payout: outcome.payout, tier: outcome.tier };
+          }
+        }
+        return { payout: 0, tier: 0 };
+      }
+
+      // Upgrades
+      purchaseCooldownUpgrade() {
+        if (playerMoney < this.cooldownUpgradeCost) {
+          alert("Not enough money to buy Cooldown Upgrade!");
+          return;
+        }
+        playerMoney -= this.cooldownUpgradeCost;
+        updateMoneyDisplay();
+        this.cooldownTime = Math.max(100, this.cooldownTime - 100);
+
+        this.cooldownUpgradeCost *= 2;
+        this.cooldownUpgradesPurchased += 1;
+        this.ui.cooldownButton.innerText = `Reduce Cooldown (-0.1s) ($${this.cooldownUpgradeCost.toFixed(2)})`;
+        updateMachineStats(this);
+      }
+      purchaseEVUpgrade() {
+        if (playerMoney < this.evUpgradeCost) {
+          alert("Not enough money to buy EV Upgrade!");
+          return;
+        }
+        playerMoney -= this.evUpgradeCost;
+        updateMoneyDisplay();
+
+        for (let o of this.payoutStructure) {
+          if (o.probability > 0) {
+            o.probability += 0.01;
+          }
+        }
+        this.evUpgradeCost *= 2;
+        this.evUpgradesPurchased += 1;
+        this.ui.evButton.innerText = `Increase EV (+0.01 each) ($${this.evUpgradeCost.toFixed(2)})`;
+        updateMachineStats(this);
+      }
+      purchaseHighestPayout() {
+        if (playerMoney < this.highestPayoutCost) {
+          alert("Not enough money to buy New Highest Payout!");
+          return;
+        }
+        playerMoney -= this.highestPayoutCost;
+        updateMoneyDisplay();
+
+        this.payoutStructure.push({
+          probability: 0.0025,
+          payout: this.nextHighestPayout,
+          tier: 7
+        });
+        this.highestPayoutCost *= 2;
+        this.highestPayoutUpgradesPurchased += 1;
+        this.nextHighestPayout *= 2;
+        this.ui.newPayoutButton.innerText = 
+          `Add Highest Payout ($${this.nextHighestPayout.toFixed(2)}) ($${this.highestPayoutCost.toFixed(2)})`;
+        updateMachineStats(this);
+      }
+      purchaseAutoSpin() {
+        if (playerMoney < this.autoSpinCost) {
+          alert("Not enough money to unlock Auto-Spin!");
+          return;
+        }
+        playerMoney -= this.autoSpinCost;
+        updateMoneyDisplay();
+        this.autoSpinEnabled = true;
+        this.ui.autoSpinButton.disabled = true;
+        this.ui.autoSpinButton.innerText = "Auto-Spin Unlocked!";
+      }
+    }
+
+    /*******************************************************
+     * 5) COOL-DOWN BAR
+     ******************************************************/
+    function updateMachineCooldown(machine) {
+      if (!machine.inCooldown) return;
+      let elapsed = Date.now() - machine.cooldownStart;
+      let remaining = Math.max(0, machine.cooldownTime - elapsed);
+      let percentage = (remaining / machine.cooldownTime) * 100;
+      if (machine.ui.cooldownFill) {
+        machine.ui.cooldownFill.style.width = percentage + "%";
+      }
+      if (remaining > 0) {
+        requestAnimationFrame(() => updateMachineCooldown(machine));
+      } else {
+        if (machine.ui.cooldownFill) {
+          machine.ui.cooldownFill.style.width = "100%";
+        }
+      }
+    }
+
+    /*******************************************************
+     * 6) STATS
+     ******************************************************/
+    function updateMachineStats(machine) {
+      let container = machine.ui.statsContainer;
+      container.innerHTML = "";
+
+      let cooldownP = document.createElement("p");
+      cooldownP.innerText = `Cooldown: ${(machine.cooldownTime / 1000).toFixed(2)}s (+${machine.cooldownUpgradesPurchased})`;
+      container.appendChild(cooldownP);
+
+      let ev = 0;
+      machine.payoutStructure.forEach(o => {
+        ev += o.probability * o.payout;
+      });
+      let evP = document.createElement("p");
+      evP.innerText = `Expected Value (per spin): $${ev.toFixed(4)} (+${machine.evUpgradesPurchased})`;
+      container.appendChild(evP);
+
+      let highPayP = document.createElement("p");
+      highPayP.innerText = `New Highest Payout Tiers Added: +${machine.highestPayoutUpgradesPurchased}`;
+      container.appendChild(highPayP);
+
+      let title = document.createElement("p");
+      title.innerText = "Payout Structure:";
+      container.appendChild(title);
+
+      let list = document.createElement("ul");
+      machine.payoutStructure.forEach(o => {
+        let li = document.createElement("li");
+        li.innerText = `Payout: $${o.payout.toFixed(2)}, Probability: ${o.probability.toFixed(4)}`;
+        list.appendChild(li);
+      });
+      container.appendChild(list);
+    }
+
+    /*******************************************************
+     * 7) CREATE MACHINE + UI
+     ******************************************************/
+    function addMachine(spinCost, payoutScale, autoSpinCost) {
+      let machine = new SlotMachine(spinCost, payoutScale, autoSpinCost);
+
+      let machineDiv = document.createElement("div");
+      machineDiv.className = "machine";
+
+      let titleEl = document.createElement("h3");
+      titleEl.innerText = `${machine.machineName}`;
+      machineDiv.appendChild(titleEl);
+
+      let resultDisplay = document.createElement("p");
+      resultDisplay.className = "resultDisplay";
+      resultDisplay.innerText = "Ready to spin!";
+      machineDiv.appendChild(resultDisplay);
+
+      let cooldownBar = document.createElement("div");
+      cooldownBar.className = "cooldownBar";
+      let cooldownFill = document.createElement("div");
+      cooldownFill.className = "cooldownFill";
+      cooldownBar.appendChild(cooldownFill);
+      machineDiv.appendChild(cooldownBar);
+
+      let spinButton = document.createElement("button");
+      spinButton.className = "spinButton";
+      spinButton.innerText = `Spin ($${spinCost.toFixed(2)} cost)`;
+      machineDiv.appendChild(spinButton);
+
+      let cooldownButton = document.createElement("button");
+      cooldownButton.innerText = `Reduce Cooldown (-0.1s) ($${machine.cooldownUpgradeCost.toFixed(2)})`;
+      machineDiv.appendChild(cooldownButton);
+
+      let evButton = document.createElement("button");
+      evButton.innerText = `Increase EV (+0.01 each) ($${machine.evUpgradeCost.toFixed(2)})`;
+      machineDiv.appendChild(evButton);
+
+      let newPayoutButton = document.createElement("button");
+      newPayoutButton.innerText = `Add Highest Payout ($${machine.nextHighestPayout.toFixed(2)}) ($${machine.highestPayoutCost.toFixed(2)})`;
+      machineDiv.appendChild(newPayoutButton);
+
+      // auto spin
+      let autoSpinButton = document.createElement("button");
+      autoSpinButton.innerText = `Buy Auto-Spin ($${autoSpinCost.toFixed(2)})`;
+      machineDiv.appendChild(autoSpinButton);
+
+      let statsContainer = document.createElement("div");
+      statsContainer.className = "machineStats";
+      machineDiv.appendChild(statsContainer);
+
+      document.getElementById("machinesContainer").appendChild(machineDiv);
+
+      machine.ui = {
+        container: machineDiv,
+        resultDisplay,
+        cooldownFill,
+        spinButton,
+        cooldownButton,
+        evButton,
+        newPayoutButton,
+        autoSpinButton,
+        statsContainer
+      };
+
+      // Spin event
+      spinButton.addEventListener("click", () => {
+        if (!machine.canSpin()) return;
+        if (playerMoney < machine.spinCost) {
+          alert("Not enough money to spin!");
+          return;
+        }
+        playerMoney -= machine.spinCost;
+        updateMoneyDisplay();
+        machine.startCooldown();
+
+        let outcome = machine.spinOutcome();
+        let payout = outcome.payout;
+        let tier = outcome.tier;
+
+        machine.ui.resultDisplay.innerText = (payout > 0)
+          ? `You won $${payout.toFixed(2)}`
+          : "No win";
+
+        if (payout > 0) {
+          flashMachine(machine, tier);
+        }
+        playerMoney += payout;
+        updateMoneyDisplay();
+      });
+
+      // Upgrade events
+      cooldownButton.addEventListener("click", () => {
+        machine.purchaseCooldownUpgrade();
+      });
+      evButton.addEventListener("click", () => {
+        machine.purchaseEVUpgrade();
+      });
+      newPayoutButton.addEventListener("click", () => {
+        machine.purchaseHighestPayout();
+      });
+      autoSpinButton.addEventListener("click", () => {
+        machine.purchaseAutoSpin();
+      });
+
+      machines.push(machine);
+
+      // Update spinCostOptions and refresh the dropdown
+      spinCostOptions.add(spinCost);
+      rebuildSpinTypeSelect();
+
+      // Show the spin-all button if there's more than one machine in total
+      if (machines.length > 1) {
+        document.getElementById("spinAllButton").style.display = "inline-block";
+      }
+
+      updateMachineStats(machine);
+      return machine;
+    }
+
+    // Helper: Rebuild the <select> with all unique spinCosts in ascending order,
+    // and show/hide the entire #spinTypeContainer depending on how many distinct types exist.
+    function rebuildSpinTypeSelect() {
+      const select = document.getElementById("spinTypeSelect");
+      const spinTypeContainer = document.getElementById("spinTypeContainer");
+      const sorted = Array.from(spinCostOptions).sort((a, b) => a - b);
+
+      // If there's more than one distinct slot type, show the container
+      if (spinCostOptions.size > 1) {
+        spinTypeContainer.style.display = "block";
+      } else {
+        spinTypeContainer.style.display = "none";
+      }
+
+      // Clear existing options
+      select.innerHTML = "";
+      // Build new <option> elements
+      sorted.forEach(cost => {
+        const opt = document.createElement("option");
+        opt.value = cost;
+        opt.textContent = `$${cost.toFixed(2)} Slot`;
+        select.appendChild(opt);
+      });
+    }
+
+    /*******************************************************
+     * 8) AUTO-SPIN LOOP
+     ******************************************************/
+    setInterval(() => {
+      machines.forEach(machine => {
+        if (machine.autoSpinEnabled) {
+          if (machine.canSpin() && playerMoney >= machine.spinCost) {
+            playerMoney -= machine.spinCost;
+            updateMoneyDisplay();
+            machine.startCooldown();
+
+            let outcome = machine.spinOutcome();
+            let payout = outcome.payout;
+            let tier = outcome.tier;
+            machine.ui.resultDisplay.innerText = (payout > 0)
+              ? `You won $${payout.toFixed(2)}`
+              : "No win";
+            if (payout > 0) {
+              flashMachine(machine, tier);
+            }
+            playerMoney += payout;
+            updateMoneyDisplay();
+          }
+        }
+      });
+    }, 200);
+
+    /*******************************************************
+     * 9) SPIN ALL (for selected type) + RESET
+     ******************************************************/
+    // Spin all machines of the selected type
+    document.getElementById("spinAllButton").addEventListener("click", () => {
+      // Get which type is selected (a float spinCost)
+      const selectedCost = parseFloat(document.getElementById("spinTypeSelect").value);
+
+      // Filter only machines of that spinCost that are ready
+      const readyMachines = machines.filter(
+        m => m.canSpin() && m.spinCost === selectedCost
+      );
+
+      // If no machines are ready, do nothing. (No pop-ups.)
+      if (readyMachines.length === 0) return;
+
+      // Calculate total cost for all ready machines of that type
+      let totalCost = 0;
+      for (let m of readyMachines) {
+        totalCost += m.spinCost;
+      }
+      // If not enough money, do nothing. (No pop-ups.)
+      if (playerMoney < totalCost) return;
+
+      // Deduct total cost
+      playerMoney -= totalCost;
+      updateMoneyDisplay();
+
+      // Perform spins
+      let totalPayout = 0;
+      readyMachines.forEach(machine => {
+        machine.startCooldown();
+        let outcome = machine.spinOutcome();
+        totalPayout += outcome.payout;
+        machine.ui.resultDisplay.innerText = (outcome.payout > 0)
+          ? `You won $${outcome.payout.toFixed(2)}`
+          : "No win";
+        if (outcome.payout > 0) {
+          flashMachine(machine, outcome.tier);
+        }
+      });
+
+      // Add total payout
+      playerMoney += totalPayout;
+      updateMoneyDisplay();
+    });
+
+    document.getElementById("resetButton").addEventListener("click", () => {
+      // Reset to $20 so we can buy things easily
+      playerMoney = 1; 
+      updateMoneyDisplay();
+
+      machines = [];
+      spinCostOptions.clear(); // Clear set
+      document.getElementById("machinesContainer").innerHTML = "";
+
+      // Also hide the spinTypeContainer and spinAllButton
+      document.getElementById("spinTypeContainer").style.display = "none";
+      document.getElementById("spinAllButton").style.display = "none";
+
+      // reset all buy cost
+      currentBuyCosts = SLOT_TIERS.map(t => t.buyCost);
+
+      // We start with a .01 slot machine => next tier is unlocked
+      highestUnlockedTier = 1;
+
+      // Rebuild the buy buttons
+      document.getElementById("buyButtonsContainer").innerHTML = "";
+      createBuyButtons();
+
+      // Rebuild the <select>
+      rebuildSpinTypeSelect();
+
+      // Actually create the initial .01 slot so we start with it
+      addMachine(0.01, 1, 4);
+    });
+
+    /*******************************************************
+     * 10) CREATING BUY BUTTONS, REVEALING ONLY WHEN UNLOCKED
+     ******************************************************/
+    function createBuyButtons() {
+      let container = document.getElementById("buyButtonsContainer");
+      container.innerHTML = "";
+
+      SLOT_TIERS.forEach((tierData, idx) => {
+        let btn = document.createElement("button");
+        // Hide all but up to highestUnlockedTier
+        btn.style.display = (idx <= highestUnlockedTier) ? "inline-block" : "none";
+
+        let sc = tierData.spinCost.toFixed(2);
+        btn.innerText = `Buy $${sc} Slot ($${tierData.buyCost.toFixed(2)} cost)`;
+
+        btn.addEventListener("click", () => {
+          let cost = currentBuyCosts[idx];
+          if (playerMoney < cost) {
+            alert(`Not enough money to buy a new $${sc} Slot!`);
+            return;
+          }
+          playerMoney -= cost;
+          updateMoneyDisplay();
+
+          addMachine(tierData.spinCost, tierData.payoutScale, tierData.autoSpinCost);
+
+          // double cost
+          currentBuyCosts[idx] *= 2;
+          btn.innerText = `Buy $${sc} Slot ($${currentBuyCosts[idx].toFixed(2)} cost)`;
+
+          // If this is the first slot of this tier & it's the next locked tier
+          if (idx === highestUnlockedTier) {
+            highestUnlockedTier++;
+            if (highestUnlockedTier < SLOT_TIERS.length) {
+              // reveal next tier
+              buyButtons[highestUnlockedTier].style.display = "inline-block";
+            }
+          }
+        });
+        container.appendChild(btn);
+      });
+
+      buyButtons = container.querySelectorAll("button");
+    }
+
+    let buyButtons = [];
+
+    /*******************************************************
+     * 11) INIT
+     ******************************************************/
+    createBuyButtons();
+
+    // 1) We have $20,
+    // 2) We consider the .01 tier "owned," so next tier is unlocked => highestUnlockedTier=1
+    // 3) Actually create the default .01 slot
+    addMachine(0.01, 1, 4);
+  </script>
+</body>
+</html>
