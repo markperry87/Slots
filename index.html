@@ -37,11 +37,45 @@
       color: #333;
     }
 
+    /* Columns for each slot tier */
+    #machinesContainer {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin: 0 auto;
+      max-width: 1300px;
+    }
+    .column {
+      position: relative;
+      width: 360px;
+      margin: 10px;
+      vertical-align: top;
+    }
+    .columnHeader {
+      margin-bottom: 10px;
+      font-weight: bold;
+    }
+    .buyButton {
+      display: inline-block;
+      margin-bottom: 20px;
+      padding: 10px 20px;
+      font-size: 1em;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      background-color: #ffc107;
+      color: #333;
+    }
+    .machinesList {
+      /* Container for all machines of this tier */
+    }
+
     .machine {
       background-color: #fff;
       border: 2px solid #333;
       padding: 20px;
-      margin: 20px auto;
+      margin-bottom: 20px;
       width: 320px;
       box-shadow: 2px 2px 8px rgba(0,0,0,0.2);
       border-radius: 8px;
@@ -93,6 +127,8 @@
     #resetButton {
       background-color: #dc3545;
       color: #fff;
+      margin-top: 30px;
+      margin-bottom: 30px;
     }
 
     @keyframes flashAnimation {
@@ -134,16 +170,19 @@
       margin: 2px 0;
     }
 
-    /* Initially hide the container for selecting a slot type to spin all */
+    /* The container for selecting a slot type to spin all */
     #spinTypeContainer {
-      display: none;
       margin-top: 20px;
+    }
+
+    select#spinTypeSelect {
+      padding: 5px 10px;
+      margin: 0 10px;
     }
   </style>
 </head>
 <body>
-  <!-- NOTE: We are automatically starting with a .01 slot machine 
-       and $20, so the user can afford to spin or buy more. -->
+  <!-- NOTE: We start automatically with a $0.01 slot machine and $20.00. -->
 
   <!-- Fixed money display container -->
   <div id="moneyContainer">
@@ -152,32 +191,32 @@
 
   <h1>Slot Machine Game (Up to $10,000 per spin!)</h1>
 
-  <!-- Container for all "Buy" buttons -->
-  <div id="buyButtonsContainer"></div>
-
-  <!-- Dropdown container: hidden until more than one distinct type exists -->
-  <div id="spinTypeContainer">
+  <!-- Dropdown + spin-all container -->
+  <div id="spinTypeContainer" style="display:none;">
     <label for="spinTypeSelect"><strong>Select Slot Type:</strong></label>
     <select id="spinTypeSelect"></select>
     
-    <!-- Spin All button appears only when more than one machine exists -->
+    <!-- Spin All button is shown once there's at least 2 machines total -->
     <button id="spinAllButton" style="display:none;">Spin All Machines of Selected Type</button>
   </div>
 
-  <br>
-  <button id="resetButton">Reset Game</button>
-  
-  <!-- Container where each machine’s UI is added -->
+  <!-- Main container for all columns (each tier) and their machines -->
   <div id="machinesContainer"></div>
-  
+
+  <!-- Reset button at the bottom -->
+  <button id="resetButton">Reset Game</button>
+
   <script>
     /*******************************************************
      * 1) PLAYER STATE
      ******************************************************/
-    let playerMoney = 1.00;  // Enough to buy + spin right away
-    let machines = []; // all machines
+    let playerMoney = 1.00;  // Start the game with $20
+    let machines = [];        // All machines (regardless of type)
+    
+    // Keep track of columns for each tier
+    let tierColumns = [];
 
-    // Maintain a set of unique spinCosts for the dropdown
+    // Distinct spin costs used in the game (for the spin-type dropdown)
     let spinCostOptions = new Set();
 
     function updateMoneyDisplay() {
@@ -199,17 +238,17 @@
       { spinCost: 125.00, buyCost: 62500,  payoutScale: 12500,  autoSpinCost: 256 },
       { spinCost: 625.00, buyCost: 312500, payoutScale: 62500,  autoSpinCost: 512 },
       { spinCost: 3125.00,buyCost: 1562500,payoutScale: 312500, autoSpinCost: 1024 },
-      { spinCost: 10000.00,buyCost: 5000000, payoutScale: 1000000, autoSpinCost: 2048 }
+      { spinCost: 10000.00,buyCost: 5000000,payoutScale: 1000000,autoSpinCost: 2048 }
     ];
 
     // We track the "next buy cost" for each tier (doubling each time).
+    // Start them at their base buyCost:
     let currentBuyCosts = SLOT_TIERS.map(t => t.buyCost);
 
-    // We want to START the game with a .01 slot => that means tier 0 is "purchased"
-    // and we should reveal tier 1 next.
+    // Highest unlocked tier. We start with tier 0 purchased => tier 1 is unlocked.
     let highestUnlockedTier = 1; 
 
-    // base payout structure for 0.01
+    // Base payout structure for 0.01
     const basePayoutStructure01 = [
       { probability: 0.1,   payout: 0.01, tier: 1 },
       { probability: 0.1,   payout: 0.02, tier: 2 },
@@ -218,7 +257,6 @@
       { probability: 0.01,  payout: 0.50, tier: 5 },
       { probability: 0.005, payout: 1.00, tier: 6 }
     ];
-
     function scalePayoutStructure(factor) {
       return basePayoutStructure01.map(o => ({
         probability: o.probability,
@@ -243,6 +281,7 @@
     function flashMachine(machine, tier) {
       const now = Date.now();
       if (now < machine.animationEndTime) {
+        // If an animation is already going, only override if new tier > old tier
         if (tier <= machine.currentAnimationTier) {
           return;
         }
@@ -284,7 +323,7 @@
         this.inCooldown = false;
         this.cooldownStart = 0;
 
-        // Scale all upgrade costs based on spin cost
+        // Scale upgrades based on spin cost
         const scaleFactor = spinCost / 0.01;
         this.cooldownUpgradeCost = 0.50 * scaleFactor;
         this.evUpgradeCost       = 1.00  * scaleFactor;
@@ -450,7 +489,12 @@
     /*******************************************************
      * 7) CREATE MACHINE + UI
      ******************************************************/
-    function addMachine(spinCost, payoutScale, autoSpinCost) {
+    function addMachine(tierIndex) {
+      const tierData = SLOT_TIERS[tierIndex];
+      const spinCost = tierData.spinCost;
+      const payoutScale = tierData.payoutScale;
+      const autoSpinCost = tierData.autoSpinCost;
+
       let machine = new SlotMachine(spinCost, payoutScale, autoSpinCost);
 
       let machineDiv = document.createElement("div");
@@ -498,7 +542,9 @@
       statsContainer.className = "machineStats";
       machineDiv.appendChild(statsContainer);
 
-      document.getElementById("machinesContainer").appendChild(machineDiv);
+      // Add this machine to the column for its tier
+      let columnObj = tierColumns[tierIndex];
+      columnObj.machinesContainer.appendChild(machineDiv);
 
       machine.ui = {
         container: machineDiv,
@@ -558,33 +604,25 @@
       spinCostOptions.add(spinCost);
       rebuildSpinTypeSelect();
 
-      // Show the spin-all button if there's more than one machine in total
+      // Show the spin-all button & container if there's at least 2 machines in total
       if (machines.length > 1) {
         document.getElementById("spinAllButton").style.display = "inline-block";
+        document.getElementById("spinTypeContainer").style.display = "block";
       }
 
       updateMachineStats(machine);
       return machine;
     }
 
-    // Helper: Rebuild the <select> with all unique spinCosts in ascending order,
-    // and show/hide the entire #spinTypeContainer depending on how many distinct types exist.
+    // Helper: Rebuild the <select> with all unique spinCosts in ascending order
     function rebuildSpinTypeSelect() {
       const select = document.getElementById("spinTypeSelect");
-      const spinTypeContainer = document.getElementById("spinTypeContainer");
-      const sorted = Array.from(spinCostOptions).sort((a, b) => a - b);
-
-      // If there's more than one distinct slot type, show the container
-      if (spinCostOptions.size > 1) {
-        spinTypeContainer.style.display = "block";
-      } else {
-        spinTypeContainer.style.display = "none";
-      }
 
       // Clear existing options
       select.innerHTML = "";
-      // Build new <option> elements
-      sorted.forEach(cost => {
+
+      const sortedCosts = Array.from(spinCostOptions).sort((a,b) => a - b);
+      sortedCosts.forEach(cost => {
         const opt = document.createElement("option");
         opt.value = cost;
         opt.textContent = `$${cost.toFixed(2)} Slot`;
@@ -624,30 +662,21 @@
      ******************************************************/
     // Spin all machines of the selected type
     document.getElementById("spinAllButton").addEventListener("click", () => {
-      // Get which type is selected (a float spinCost)
       const selectedCost = parseFloat(document.getElementById("spinTypeSelect").value);
-
-      // Filter only machines of that spinCost that are ready
       const readyMachines = machines.filter(
         m => m.canSpin() && m.spinCost === selectedCost
       );
-
-      // If no machines are ready, do nothing. (No pop-ups.)
       if (readyMachines.length === 0) return;
 
-      // Calculate total cost for all ready machines of that type
       let totalCost = 0;
       for (let m of readyMachines) {
         totalCost += m.spinCost;
       }
-      // If not enough money, do nothing. (No pop-ups.)
       if (playerMoney < totalCost) return;
 
-      // Deduct total cost
       playerMoney -= totalCost;
       updateMoneyDisplay();
 
-      // Perform spins
       let totalPayout = 0;
       readyMachines.forEach(machine => {
         machine.startCooldown();
@@ -661,97 +690,110 @@
         }
       });
 
-      // Add total payout
       playerMoney += totalPayout;
       updateMoneyDisplay();
     });
 
     document.getElementById("resetButton").addEventListener("click", () => {
-      // Reset to $20 so we can buy things easily
-      playerMoney = 1; 
+      // Reset to full initial state
+      playerMoney = 1.00;
       updateMoneyDisplay();
 
       machines = [];
-      spinCostOptions.clear(); // Clear set
+      spinCostOptions.clear();
+      document.getElementById("spinAllButton").style.display = "none";
+      document.getElementById("spinTypeContainer").style.display = "none";
       document.getElementById("machinesContainer").innerHTML = "";
 
-      // Also hide the spinTypeContainer and spinAllButton
-      document.getElementById("spinTypeContainer").style.display = "none";
-      document.getElementById("spinAllButton").style.display = "none";
-
-      // reset all buy cost
       currentBuyCosts = SLOT_TIERS.map(t => t.buyCost);
-
-      // We start with a .01 slot machine => next tier is unlocked
       highestUnlockedTier = 1;
 
-      // Rebuild the buy buttons
-      document.getElementById("buyButtonsContainer").innerHTML = "";
-      createBuyButtons();
+      // Re-create columns from scratch
+      createTierColumns();
 
       // Rebuild the <select>
       rebuildSpinTypeSelect();
 
-      // Actually create the initial .01 slot so we start with it
-      addMachine(0.01, 1, 4);
+      // Automatically create the initial $0.01 slot
+      addMachine(0);
     });
 
     /*******************************************************
-     * 10) CREATING BUY BUTTONS, REVEALING ONLY WHEN UNLOCKED
+     * 10) CREATE THE COLUMNS AND BUY BUTTONS
      ******************************************************/
-    function createBuyButtons() {
-      let container = document.getElementById("buyButtonsContainer");
-      container.innerHTML = "";
+    function createTierColumns() {
+      const container = document.getElementById("machinesContainer");
+      container.innerHTML = ""; // Clear any existing
 
       SLOT_TIERS.forEach((tierData, idx) => {
-        let btn = document.createElement("button");
-        // Hide all but up to highestUnlockedTier
-        btn.style.display = (idx <= highestUnlockedTier) ? "inline-block" : "none";
+        let columnDiv = document.createElement("div");
+        columnDiv.className = "column";
 
-        let sc = tierData.spinCost.toFixed(2);
-        btn.innerText = `Buy $${sc} Slot ($${tierData.buyCost.toFixed(2)} cost)`;
+        let spinCostFormatted = tierData.spinCost.toFixed(2);
 
-        btn.addEventListener("click", () => {
+        // The Buy button for this tier:
+        let buyBtn = document.createElement("button");
+        buyBtn.classList.add("buyButton");
+        buyBtn.innerText = `Buy $${spinCostFormatted} Slot ($${tierData.buyCost.toFixed(2)} cost)`;
+        if (idx > highestUnlockedTier) {
+          buyBtn.style.display = "none";
+        }
+
+        // Listen for "Buy" click
+        buyBtn.addEventListener("click", () => {
           let cost = currentBuyCosts[idx];
           if (playerMoney < cost) {
-            alert(`Not enough money to buy a new $${sc} Slot!`);
+            alert(`Not enough money to buy a new $${spinCostFormatted} Slot!`);
             return;
           }
           playerMoney -= cost;
           updateMoneyDisplay();
 
-          addMachine(tierData.spinCost, tierData.payoutScale, tierData.autoSpinCost);
+          // Add the new machine
+          addMachine(idx);
 
-          // double cost
+          // Double the cost for next time
           currentBuyCosts[idx] *= 2;
-          btn.innerText = `Buy $${sc} Slot ($${currentBuyCosts[idx].toFixed(2)} cost)`;
+          buyBtn.innerText = `Buy $${spinCostFormatted} Slot ($${currentBuyCosts[idx].toFixed(2)} cost)`;
 
-          // If this is the first slot of this tier & it's the next locked tier
+          // If this is the first slot for this tier and it's the 'next unlocked' tier, unlock the next
           if (idx === highestUnlockedTier) {
             highestUnlockedTier++;
             if (highestUnlockedTier < SLOT_TIERS.length) {
-              // reveal next tier
-              buyButtons[highestUnlockedTier].style.display = "inline-block";
+              let nextBtn = tierColumns[highestUnlockedTier].buyButton;
+              nextBtn.style.display = "inline-block";
             }
           }
         });
-        container.appendChild(btn);
+
+        let header = document.createElement("div");
+        header.className = "columnHeader";
+        header.appendChild(buyBtn);
+
+        let machinesList = document.createElement("div");
+        machinesList.className = "machinesList";
+
+        columnDiv.appendChild(header);
+        columnDiv.appendChild(machinesList);
+        container.appendChild(columnDiv);
+
+        // Keep references for adding new machines later
+        tierColumns[idx] = {
+          buyButton: buyBtn,
+          machinesContainer: machinesList
+        };
       });
-
-      buyButtons = container.querySelectorAll("button");
     }
-
-    let buyButtons = [];
 
     /*******************************************************
      * 11) INIT
      ******************************************************/
-    createBuyButtons();
+    // Create all columns
+    createTierColumns();
 
-    // 1) We have $20,
-    // 2) We consider the .01 tier "owned," so next tier is unlocked => highestUnlockedTier=1
-    // 3) Actually create the default .01 slot
-    addMachine(0.01, 1, 4);
+    // We start with a default $0.01 slot
+    // (The game description said "start with a .01 slot unlocked.")
+    addMachine(0);
   </script>
 </body>
 </html>
