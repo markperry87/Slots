@@ -17,7 +17,6 @@
     h1 {
       margin-top: 20px;
     }
-
     /* Fixed money display at the top */
     #moneyContainer {
       position: fixed;
@@ -35,7 +34,6 @@
       font-weight: bold;
       color: #333;
     }
-
     /* Container for the "spin all" controls */
     #spinTypeContainer {
       margin: 20px 0;
@@ -53,7 +51,6 @@
       border-radius: 5px;
       cursor: pointer;
     }
-
     /* Container for tier columns */
     #machinesContainer {
       display: flex;
@@ -62,7 +59,6 @@
       max-width: 1400px;
       margin: 0 auto;
     }
-
     .column {
       background-color: #fff;
       border: 2px solid #333;
@@ -80,7 +76,6 @@
       justify-content: center;
       gap: 5px;
     }
-
     /* Upgrade/buy buttons in the column header */
     .upgradeButtons button {
       background-color: #eee;
@@ -94,7 +89,6 @@
     .upgradeButtons button:hover {
       background-color: #ddd;
     }
-
     /* The stats panel is shown on hover */
     .tierStats {
       display: none; /* hidden by default, shown on hover */
@@ -107,7 +101,6 @@
     .column:hover .tierStats {
       display: block;
     }
-
     /* Machine list arranged as a flex grid */
     .machinesList {
       padding: 10px;
@@ -115,7 +108,6 @@
       flex-wrap: wrap;
       justify-content: center;
     }
-
     /* Machine UI – smaller so that many machines can fit in the tier column */
     .machine {
       background-color: #fff;
@@ -151,7 +143,6 @@
       background-color: #76c7c0;
       transition: width 0.1s linear;
     }
-
     /* Keyframes for the flash effect */
     @keyframes flashAnimation {
       0%, 100% {
@@ -173,7 +164,6 @@
       animation-timing-function: ease-in-out;
       animation-iteration-count: var(--flash-count, 1);
     }
-
     /* Reset button at the bottom */
     #resetButton {
       background-color: #dc3545;
@@ -215,7 +205,7 @@
      * Data Structures
      ***********************************************************/
     let playerMoney = 1.00;
-    // New global variable to hold the currently displayed money amount.
+    // Global variable for the currently displayed money amount (for smooth animation)
     let displayedMoney = playerMoney;
 
     // SLOT_TIERS in order. (Tier 0 = .01, Tier 1 = .05, etc.)
@@ -228,8 +218,8 @@
       { spinCost: 25.00,  buyCost: 12500,  payoutScale: 2500,   autoSpinCost: 128   },
       { spinCost: 125.00, buyCost: 62500,  payoutScale: 12500,  autoSpinCost: 256   },
       { spinCost: 625.00, buyCost: 312500, payoutScale: 62500,  autoSpinCost: 512   },
-      { spinCost: 3125.00,buyCost: 1562500,payoutScale: 312500, autoSpinCost: 1024  },
-      { spinCost: 10000.00,buyCost: 5000000,payoutScale: 1000000,autoSpinCost: 2048 },
+      { spinCost: 3125.00, buyCost: 1562500, payoutScale: 312500, autoSpinCost: 1024 },
+      { spinCost: 10000.00, buyCost: 5000000, payoutScale: 1000000, autoSpinCost: 2048 },
     ];
 
     // For each tier, we track dynamic changes.
@@ -272,31 +262,35 @@
      * Smooth Money Animation & Number Formatting
      ***********************************************************/
     function animateMoneyCounter() {
-      if (displayedMoney !== playerMoney) {
-        const diff = playerMoney - displayedMoney;
-        const step = Math.sign(diff) * Math.max(Math.ceil(Math.abs(diff) / 10), 1);
-        displayedMoney += step;
+      const diff = playerMoney - displayedMoney;
+      // If the difference is less than one cent, finish the animation.
+      if (Math.abs(diff) < 0.01) {
+        displayedMoney = playerMoney;
         document.getElementById("moneyDisplay").textContent = formatNumber(displayedMoney);
-        if (displayedMoney !== playerMoney) {
-          requestAnimationFrame(animateMoneyCounter);
-        }
-      } else {
-        document.getElementById("moneyDisplay").textContent = formatNumber(playerMoney);
+        return;
       }
+      // Move 10% of the way toward the target value.
+      displayedMoney += diff * 0.1;
+      document.getElementById("moneyDisplay").textContent = formatNumber(displayedMoney);
+      requestAnimationFrame(animateMoneyCounter);
     }
 
+    // Revised formatNumber: Show cents (two decimals) for values under $100.
     function formatNumber(num) {
-      if (num < 1000) {
+      if (num < 100) {
+        return num.toFixed(2);
+      } else if (num < 1000) {
         return Math.floor(num).toLocaleString();
+      } else {
+        const suffixes = ["K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No"];
+        let value = num;
+        let step = 0;
+        while (value >= 1000 && step < suffixes.length) {
+          value /= 1000;
+          step++;
+        }
+        return value.toFixed(2) + suffixes[step - 1];
       }
-      const suffixes = ["K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No"];
-      let value = num;
-      let step = 0;
-      while (value >= 1000 && step < suffixes.length) {
-        value /= 1000;
-        step++;
-      }
-      return value.toFixed(2) + suffixes[step - 1];
     }
 
     /***********************************************************
@@ -321,13 +315,10 @@
         this.highestPayoutUpgradesPurchased = 0;
         this.autoSpinEnabled = false;
         this.autoSpinPurchased = false;
-
         this.payoutStructure = scalePayoutStructure(payoutScale);
         this.nextHighestPayout = 2.00 * payoutScale;
-
         // Only Tier 0 (.01) is unlocked at the start.
         this.unlocked = (tierIndex === 0);
-
         // DOM element references (set when the column is built)
         this.columnDiv = null; 
         this.machinesList = null; 
@@ -460,7 +451,7 @@
         this.highestPayoutUpgradesPurchased++;
         this.highestPayoutCost *= 2;
         this.nextHighestPayout *= 2;
-        // Check if another highest payout upgrade would exceed 100%
+        // Check if another highest payout upgrade would exceed 1.0 total probability
         let nextProb = (baseProb + 0.01 * this.evUpgradesPurchased) * Math.pow(0.9, this.highestPayoutUpgradesPurchased);
         if (this.getTotalProbability() + nextProb > 1.0) {
           this.highestPayoutButton.textContent = "Add Highest Payout (Max)";
@@ -611,7 +602,6 @@
       if (highestUnlocked < tierStates.length - 1) {
         container.appendChild(createTierColumn(highestUnlocked + 1));
       }
-
       // --- FIX: Reattach existing machine UI elements ---
       machines.forEach(m => {
         let tState = tierStates[m.tierIndex];
@@ -651,29 +641,24 @@
       // (The column is already built in updateColumnsDisplay.)
       let m = new Machine(tierIdx);
       machines.push(m);
-
       let mDiv = document.createElement('div');
       mDiv.className = 'machine';
-
       let resultEl = document.createElement('p');
       resultEl.className = 'resultDisplay';
       resultEl.innerText = "Ready!";
       mDiv.appendChild(resultEl);
-
       let cdBar = document.createElement('div');
       cdBar.className = 'cooldownBar';
       let cdFill = document.createElement('div');
       cdFill.className = 'cooldownFill';
       cdBar.appendChild(cdFill);
       mDiv.appendChild(cdBar);
-
       tState.machinesList.appendChild(mDiv);
       m.ui = {
         container: mDiv,
         resultDisplay: resultEl,
         cooldownFill: cdFill
       };
-
       spinCostOptions.add(tState.spinCost);
       rebuildSpinTypeSelect();
       return m;
@@ -704,10 +689,8 @@
       let tState = tierStates[m.tierIndex];
       if (!m.canSpin()) return false;
       if (playerMoney < tState.spinCost) return false;
-
       playerMoney -= tState.spinCost;
       updateMoneyDisplay();
-
       m.inCooldown = true;
       m.cooldownStart = Date.now();
       let localCooldown = tState.cooldownTime;
@@ -717,7 +700,6 @@
           m.ui.cooldownFill.style.width = "100%";
         }
       }, localCooldown);
-
       function animateCD() {
         if (!m.inCooldown) return;
         let elapsed = Date.now() - m.cooldownStart;
@@ -729,15 +711,12 @@
         if (remain > 0) requestAnimationFrame(animateCD);
       }
       animateCD();
-
       let outcome = spinOutcome(tState);
       let payout = outcome.payout;
       let tierVal = outcome.tier;
-
       m.ui.resultDisplay.innerText = (payout > 0)
         ? `Won $${payout.toFixed(2)}`
         : "No win";
-
       if (payout > 0) flashMachine(m, tierVal);
       playerMoney += payout;
       updateMoneyDisplay();
@@ -763,7 +742,6 @@
       let durSec = parseFloat(anim.flashDuration) * anim.flashCount;
       m.animationEndTime = now + durSec * 1000;
       m.currentAnimationTier = tierVal;
-
       let c = m.ui.container;
       c.style.setProperty('--flash-color', anim.flashColor);
       c.style.setProperty('--flash-duration', anim.flashDuration);
@@ -810,7 +788,6 @@
       spinCostOptions.clear();
       document.getElementById("machinesContainer").innerHTML = "";
       document.getElementById("spinTypeSelect").innerHTML = "";
-
       // Reinitialize tierStates – only Tier 0 is unlocked.
       tierStates = [];
       SLOT_TIERS.forEach((t, idx) => {
